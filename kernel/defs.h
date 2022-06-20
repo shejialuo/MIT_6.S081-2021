@@ -63,6 +63,7 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            vmprint(pagetable_t);
 
 // log.c
 void            initlog(int, struct superblock*);
