@@ -46,7 +46,7 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
-  
+
   addr = myproc()->sz;
   if(growproc(n) < 0)
     return -1;
@@ -80,8 +80,48 @@ sys_sleep(void)
 int
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
-  return 0;
+  uint64 va;
+  int count;
+  uint64 buffer;
+  if(argaddr(0, &va) < 0 ||
+     argint(1, &count) < 0 ||
+     argaddr(2, &buffer) < 0)
+    return -1;
+
+  int byte_count = count / 8;
+  char *buf = kalloc();
+  /*
+    * Here, it is important to set the value to be 0.
+    * Because `kalloc` writes some junk values.
+  */
+  memset(buf, 0, byte_count);
+
+  va = PGROUNDDOWN(va);
+
+  for(int i = 0; i < count; i++) {
+    pagetable_t pagetable = myproc()->pagetable;
+    for(int level = 2; level > 0; level--) {
+      pte_t *pte = &pagetable[PX(level, va)];
+      if(*pte & PTE_V) {
+        pagetable = (pagetable_t)PTE2PA(*pte);
+      } else {
+        kfree((void*)buf);
+        return -1;
+      }
+    }
+    pte_t *pte = &pagetable[PX(0, va)];
+
+    /*
+      * Pay attention to the bit operation
+    */
+    buf[i / 8] |= (((*pte & PTE_A) >> 6) << (i % 8));
+    *pte = (*pte) & (~PTE_A);
+    va += PGSIZE;
+  }
+  int exit_value = copyout(myproc()->pagetable, buffer, buf, byte_count);
+  kfree((void*)buf);
+
+  return exit_value;
 }
 #endif
 
