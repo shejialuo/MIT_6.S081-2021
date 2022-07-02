@@ -21,12 +21,14 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i = 0; i < NCPU; ++i) {
+    initlock(&kmem[i].lock, "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +58,14 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  uint64 cpu = cpuid();
+
+  acquire(&kmem[cpu].lock);
+  r->next = kmem[cpu].freelist;
+  kmem[cpu].freelist = r;
+  release(&kmem[cpu].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,11 +76,38 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  uint64 cpu = cpuid();
+
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;
+  if(r) {
+    kmem[cpu].freelist = r->next;
+    release(&kmem[cpu].lock);
+  } else {
+    /*
+      * When the current free list is empty, we need
+      * to steal the other cpu's free list. It may seems
+      * that we need to do some move operation. However,
+      * for simplicity, here we just use another cpu's
+      * free memory to allocate the memory.
+    */
+    release(&kmem[cpu].lock);
+    for(int i = 0; i < NCPU; ++i) {
+      if(i == cpu) continue;
+      acquire(&kmem[i].lock);
+      r = kmem[i].freelist;
+      if(r) {
+        kmem[i].freelist = r->next;
+        release(&kmem[i].lock);
+        break;
+      } else {
+        release(&kmem[i].lock);
+      }
+    }
+  }
+
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
