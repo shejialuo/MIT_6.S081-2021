@@ -316,6 +316,33 @@ sys_open(void)
     }
   }
 
+  if(ip->type == T_SYMLINK) {
+    if((omode & O_NOFOLLOW) == 0) {
+      char next[MAXPATH];
+      int depth = 0;
+      while(1) {
+        if(depth >= 10) {
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        if(readi(ip, 0, (uint64)next, ip->size-MAXPATH, MAXPATH) != MAXPATH) {
+          return -1;
+        }
+        iunlockput(ip);
+        if((ip = namei(next)) == 0) {
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+        if(ip->type != T_SYMLINK) {
+          break;
+        }
+        depth++;
+      }
+    }
+  }
+
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
@@ -393,7 +420,7 @@ sys_chdir(void)
   char path[MAXPATH];
   struct inode *ip;
   struct proc *p = myproc();
-  
+
   begin_op();
   if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
     end_op();
@@ -482,5 +509,30 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH];
+  char path[MAXPATH];
+  struct inode *path_;
+  if(argstr(0, target, MAXPATH) < 0 ||
+     argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  if((path_ = namei(path)) == 0) {
+    path_ = create(path, T_SYMLINK, 0, 0);
+    iunlock(path_);
+  }
+
+  ilock(path_);
+  if(writei(path_, 0, (uint64)target, path_->size, MAXPATH) != MAXPATH){
+    return -1;
+  }
+  iunlockput(path_);
+  end_op();
   return 0;
 }
